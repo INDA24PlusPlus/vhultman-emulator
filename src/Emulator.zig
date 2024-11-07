@@ -8,7 +8,7 @@ const enable_exceptions = true;
 const enable_verbose_instructions = true;
 
 // 2 MB
-const stack_size = 2 * (1 << 20);
+const stack_size = 2 * (1 << 20) + 16;
 
 const InstType = enum(u7) {
     r_type = 0b0110011,
@@ -76,7 +76,6 @@ const JType = packed struct(u32) {
 verbose_inst: if (enable_verbose_instructions) std.ArrayListUnmanaged([:0]const u8) else void,
 
 program_memory: []u8,
-pm_ptr: [*]u8,
 registers: [32]u64,
 pc: u64,
 code: []u8,
@@ -85,7 +84,7 @@ gpa: Allocator,
 pub fn init(gpa: Allocator, code: []u8) !Emulator {
     const stack = try gpa.alignedAlloc(u8, 128, stack_size);
     var registers = [_]u64{0} ** 32;
-    registers[2] = stack.len;
+    registers[2] = stack.len - 16;
 
     var new_code = try gpa.alloc(u8, code.len + 2 * 4);
     // addi a7, x0, 93
@@ -100,7 +99,6 @@ pub fn init(gpa: Allocator, code: []u8) !Emulator {
         .registers = registers,
         .pc = 4 * 2,
         .code = new_code,
-        .pm_ptr = stack.ptr,
         .verbose_inst = std.ArrayListUnmanaged([:0]const u8){},
     };
 }
@@ -580,12 +578,14 @@ pub fn next(self: *Emulator) !bool {
             self.logInst("jal x{d}, {d}", .{ inst.rd, offset });
         },
         .jalr => {
+            log.debug("PC before jalr is {d}", .{self.pc});
             const inst: IType = @bitCast(instruction);
             std.debug.print("Inst is {}\n", .{inst});
-            self.registers[inst.rd] = self.pc + 4;
             const offset = signExtend(i64, u12, inst.imm);
             const base: i64 = @bitCast(self.registers[inst.rs1]);
             const address: u64 = @bitCast(base + offset);
+            log.debug("JALR wants to go to adress: {d}, offset is {d} and base is {d}", .{ address, offset, base });
+            self.registers[inst.rd] = self.pc + 4;
 
             if (enable_exceptions) {
                 if (address & 0b011 != 0) {
@@ -723,10 +723,14 @@ pub fn next(self: *Emulator) !bool {
         },
         .auipc => {
             log.warn("auipc instruction untested, double check that it is correct if you see this!", .{});
+            log.warn("before AUIPC pc is {d}", .{self.pc});
             const inst: UType = @bitCast(instruction);
-            const imm: u32 = signExtend(u32, u20, inst.imm << 12);
-            self.pc += imm << 12;
+            const imm: u32 = signExtend(u32, u20, inst.imm) << 12;
+            const if_zero = @as(u64, @intFromBool(imm == 0)) * 4;
+            self.pc += imm;
             self.registers[inst.rd] = self.pc;
+            self.pc += if_zero;
+            log.warn("after AUIPC pc is {d}", .{self.pc});
             self.logInst("auipc x{d}, {d}", .{ inst.rd, @as(i32, @bitCast(imm)) });
         },
     }

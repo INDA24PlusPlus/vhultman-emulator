@@ -92,6 +92,7 @@ pub fn main() !void {
     while (c.glfwWindowShouldClose(window) != c.GLFW_TRUE) {
         c.nk_glfw3_new_frame();
         c.glfwPollEvents();
+        _ = try emu.next();
 
         if (c.nk_begin(ctx, "Controls", c.nk_rect(25, @floatFromInt(height - 125), 120, 100), c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE |
             c.NK_WINDOW_MINIMIZABLE | c.NK_WINDOW_TITLE) == c.nk_true)
