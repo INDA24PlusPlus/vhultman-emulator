@@ -11,8 +11,11 @@ const enable_verbose_instructions = true;
 const stack_size = 2 * (1 << 20);
 
 const InstType = enum(u7) {
+    r_type = 0b0110011,
     i_type = 0b0010011,
     s_type = 0b0100011,
+    j_type = 0b1101111,
+    b_type = 0b1100011,
     load = 0b0000011,
 
     jalr = 0b1100111,
@@ -49,7 +52,22 @@ const RType = packed struct(u32) {
     funct7: u7,
 };
 
+const BType = packed struct(u32) {
+    opcode: u7,
+    offset0: u5,
+    funct3: u3,
+    rs1: u5,
+    rs2: u5,
+    offset1: u7,
+};
+
 const UType = packed struct(u32) {
+    opcode: u7,
+    rd: u5,
+    imm: u20,
+};
+
+const JType = packed struct(u32) {
     opcode: u7,
     rd: u5,
     imm: u20,
@@ -190,6 +208,17 @@ pub fn next(self: *Emulator) !bool {
                     self.logInst("sb x{d}, {d}(x{d})", .{ inst.rs2, offset, inst.rs1 });
                     log.debug("Wrote x{d} with value {d} to memory address 0x{x}", .{ inst.rs2, self.registers[inst.rs2], address });
                 },
+                // sh
+                0b001 => {
+                    const imm0: u12 = @as(u12, inst.imm0);
+                    const imm1: u12 = @as(u12, inst.imm1) << 5;
+                    const offset = signExtend(i64, u12, imm0 | imm1);
+                    const base: i64 = @bitCast(self.registers[inst.rs1]);
+                    const address: u64 = @bitCast(base + offset);
+                    const ptr: *u16 = @ptrCast(@alignCast(&self.program_memory[address]));
+                    ptr.* = @truncate(self.registers[inst.rs2]);
+                    self.logInst("sh x{d}, {d}(x{d})", .{ inst.rs2, offset, inst.rs1 });
+                },
                 // sw
                 0b010 => {
                     const imm0: u12 = @as(u12, inst.imm0);
@@ -239,34 +268,179 @@ pub fn next(self: *Emulator) !bool {
             }
             self.pc += 4;
         },
+        .r_type => {
+            const inst: RType = @bitCast(instruction);
+            switch (inst.funct7) {
+                0b0000000 => switch (inst.funct3) {
+                    // add
+                    0b000 => {
+                        const rs1: i64 = @bitCast(self.registers[inst.rs1]);
+                        const rs2: i64 = @bitCast(self.registers[inst.rs2]);
+                        // TODO: Ignore overflow.
+                        self.registers[inst.rd] = @bitCast(rs1 + rs2);
+                        self.logInst("add x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
+                    },
+                    // sll
+                    0b001 => {
+                        const rs1: u64 = self.registers[inst.rs1];
+                        const rs2: u6 = @truncate(self.registers[inst.rs2]);
+                        self.registers[inst.rd] = rs1 << rs2;
+                        self.logInst("sll x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
+                    },
+                    // srl
+                    0b101 => {
+                        const rs1: u64 = self.registers[inst.rs1];
+                        const rs2: u6 = @truncate(self.registers[inst.rs2]);
+                        self.registers[inst.rd] = rs1 >> rs2;
+                        self.logInst("srl x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
+                    },
+                    // slt
+                    0b010 => {
+                        const rs1: i64 = @bitCast(self.registers[inst.rs1]);
+                        const rs2: i64 = @bitCast(self.registers[inst.rs2]);
+                        self.registers[inst.rd] = @intFromBool(rs1 < rs2);
+                        self.logInst("slt x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
+                    },
+                    // sltu
+                    0b011 => {
+                        const rs1 = self.registers[inst.rs1];
+                        const rs2 = self.registers[inst.rs2];
+                        self.registers[inst.rd] = @intFromBool(rs1 < rs2);
+                        self.logInst("sltu x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
+                    },
+                    // or
+                    0b110 => {
+                        const rs1 = self.registers[inst.rs1];
+                        const rs2 = self.registers[inst.rs2];
+                        self.registers[inst.rd] = rs1 | rs2;
+                        self.logInst("or x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
+                    },
+                    // and
+                    0b111 => {
+                        const rs1 = self.registers[inst.rs1];
+                        const rs2 = self.registers[inst.rs2];
+                        self.registers[inst.rd] = rs1 & rs2;
+                        self.logInst("and x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
+                    },
+                    // xor
+                    0b100 => {
+                        const rs1 = self.registers[inst.rs1];
+                        const rs2 = self.registers[inst.rs2];
+                        self.registers[inst.rd] = rs1 ^ rs2;
+                        self.logInst("xor x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
+                    },
+                },
+                0b0100000 => switch (inst.funct3) {
+                    // sub
+                    0b000 => {
+                        const rs1: i64 = @bitCast(self.registers[inst.rs1]);
+                        const rs2: i64 = @bitCast(self.registers[inst.rs2]);
+                        // TODO: Ignore overflow.
+                        self.registers[inst.rd] = @bitCast(rs1 - rs2);
+                        self.logInst("sub x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
+                    },
+                    // sra
+                    0b101 => {
+                        const rs1: i64 = @bitCast(self.registers[inst.rs1]);
+                        const rs2: u6 = @truncate(self.registers[inst.rs2]);
+                        self.registers[inst.rd] = @bitCast(rs1 >> rs2);
+                        self.logInst("sra x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
+                    },
+                    else => std.debug.panic("Invalid funct3: {b}", .{inst.funct3}),
+                },
+                else => std.debug.panic("Invalid funct7: {b}", .{inst.funct7}),
+            }
+            self.pc += 4;
+        },
         .rv64_type => {
             const inst: RType = @bitCast(instruction);
             switch (inst.funct7) {
-                // addw
-                0b000 => {
+                0b0000000 => switch (inst.funct3) {
+                    // addw
+                    0b000 => {
+                        const rs1: i32 = @bitCast(@as(u32, @truncate(self.registers[inst.rs1])));
+                        const rs2: i32 = @bitCast(@as(u32, @truncate(self.registers[inst.rs2])));
+
+                        // TODO: Ignore overflow.
+                        const result = signExtend(u64, i32, rs1 + rs2);
+                        self.registers[inst.rd] = result;
+                        self.logInst("addw x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
+                    },
+                    // sllw
+                    0b001 => {
+                        const rs1: u32 = @truncate(self.registers[inst.rs1]);
+                        const rs2: u5 = @truncate(self.registers[inst.rs2]);
+                        const result = signExtend(u64, u32, rs1 << rs2);
+                        self.registers[inst.rd] = result;
+                        self.logInst("sllw x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
+                    },
+                    // srlw
+                    0b101 => {
+                        const rs1: u32 = @truncate(self.registers[inst.rs1]);
+                        const rs2: u5 = @truncate(self.registers[inst.rs2]);
+                        const result = signExtend(u64, u32, rs1 >> rs2);
+                        self.registers[inst.rd] = result;
+                        self.logInst("srlw x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
+                    },
+                    else => std.debug.panic("Invalid funct3", .{}),
+                },
+                0b0100000 => if (inst.funct3 == 0b101) {
+                    // sraw
+                    const rs1: i32 = @bitCast(@as(u32, @truncate(self.registers[inst.rs1])));
+                    const rs2: u5 = @truncate(self.registers[inst.rs2]);
+                    const result = signExtend(u64, i32, rs1 >> rs2);
+                    self.registers[inst.rd] = result;
+                    self.logInst("sraw x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
+                } else {
+                    // This else clause should be fine since I think these are the only options.
+                    // subw
                     const rs1: i32 = @bitCast(@as(u32, @truncate(self.registers[inst.rs1])));
                     const rs2: i32 = @bitCast(@as(u32, @truncate(self.registers[inst.rs2])));
 
                     // TODO: Ignore overflow.
-                    const result = signExtend(u64, i32, rs1 + rs2);
+                    const result = signExtend(u64, i32, rs1 - rs2);
                     self.registers[inst.rd] = result;
-                    self.logInst("addw x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
+                    self.logInst("subw x{d}, x{d}, x{d}", .{ inst.rd, inst.rs1, inst.rs2 });
                 },
-                else => std.debug.panic("Invalid funct3", .{}),
+
+                else => std.debug.panic("Invalid funct7", .{}),
             }
             self.pc += 4;
         },
         .rv64_i_type => {
-            const funct3: IType = @bitCast(instruction);
-            switch (funct3.funct3) {
+            const inst: IType = @bitCast(instruction);
+            switch (inst.funct3) {
                 // addiw
                 0b000 => {
-                    const inst: IType = @bitCast(instruction);
                     const imm = signExtend(i32, u12, inst.imm);
                     const rs1: i64 = @bitCast(self.registers[inst.rs1]);
                     const result: u32 = @bitCast(@as(i32, @truncate(rs1 + imm)));
                     self.registers[inst.rd] = @bitCast(signExtend(i64, u32, result));
                     self.logInst("addiw x{d}, x{d}, {d}", .{ inst.rd, inst.rs1, imm });
+                },
+                // slliw
+                0b001 => {
+                    const shift: u5 = @truncate((instruction >> 20) & 0b11111);
+                    const value: u32 = @truncate(self.registers[inst.rs1]);
+                    self.registers[inst.rd] = signExtend(u64, u32, value << shift);
+                    self.logInst("slliw x{d}, x{d}, {d}", .{ inst.rd, inst.rs1, shift });
+                },
+                0b101 => {
+                    if (instruction & (1 << 30) != 0) {
+                        // sraiw
+                        log.warn("instruction sraiw untested", .{});
+                        const shift: u5 = @truncate((instruction >> 20) & 0b11111);
+                        const value: i32 = @bitCast(@as(u32, @truncate(self.registers[inst.rs1])));
+                        self.registers[inst.rd] = signExtend(u64, i32, value >> shift);
+                        self.logInst("sraiw x{d}, x{d}, {d}", .{ inst.rd, inst.rs1, shift });
+                    } else {
+                        // srliw
+                        log.warn("instruction srliw untested", .{});
+                        const shift: u5 = @truncate((instruction >> 20) & 0b11111);
+                        const value: u32 = @truncate(self.registers[inst.rs1]);
+                        self.registers[inst.rd] = signExtend(u64, u32, value >> shift);
+                        self.logInst("srliw x{d}, x{d}, {d}", .{ inst.rd, inst.rs1, shift });
+                    }
                 },
                 else => std.debug.panic("Invalid funct3", .{}),
             }
@@ -277,6 +451,56 @@ pub fn next(self: *Emulator) !bool {
             const inst: IType = @bitCast(instruction);
             std.debug.print("Inst is {}\n", .{inst});
             switch (inst.funct3) {
+                // lb
+                0b000 => {
+                    const offset: i64 = signExtend(i64, u12, inst.imm);
+                    const base: i64 = @bitCast(self.registers[inst.rs1]);
+                    const address: u64 = @bitCast(base + offset);
+                    self.registers[inst.rd] = signExtend(u64, u8, self.program_memory[address]);
+                    self.logInst("lb x{d}, {d}(x{d})", .{ inst.rd, offset, inst.rs1 });
+                },
+                // lbu
+                0b100 => {
+                    const offset: i64 = signExtend(i64, u12, inst.imm);
+                    const base: i64 = @bitCast(self.registers[inst.rs1]);
+                    const address: u64 = @bitCast(base + offset);
+                    self.registers[inst.rd] = self.program_memory[address];
+                    self.logInst("lbu x{d}, {d}(x{d})", .{ inst.rd, offset, inst.rs1 });
+                },
+                // lh
+                0b001 => {
+                    const offset: i64 = signExtend(i64, u12, inst.imm);
+                    const base: i64 = @bitCast(self.registers[inst.rs1]);
+                    const address: u64 = @bitCast(base + offset);
+
+                    if (enable_exceptions) {
+                        if (address & 0b1 != 0) {
+                            log.err("Instruction LH can only load from 2-byte aligned addresses", .{});
+                            return error.DecodeError;
+                        }
+                    }
+
+                    const ptr: *u16 = @ptrCast(@alignCast(&self.program_memory[address]));
+                    self.registers[inst.rd] = signExtend(u64, u16, ptr.*);
+                    self.logInst("lh x{d}, {d}(x{d})", .{ inst.rd, offset, inst.rs1 });
+                },
+                // lhu
+                0b101 => {
+                    const offset: i64 = signExtend(i64, u12, inst.imm);
+                    const base: i64 = @bitCast(self.registers[inst.rs1]);
+                    const address: u64 = @bitCast(base + offset);
+
+                    if (enable_exceptions) {
+                        if (address & 0b1 != 0) {
+                            log.err("Instruction LHU can only load from 2-byte aligned addresses", .{});
+                            return error.DecodeError;
+                        }
+                    }
+
+                    const ptr: *u16 = @ptrCast(@alignCast(&self.program_memory[address]));
+                    self.registers[inst.rd] = ptr.*;
+                    self.logInst("lhu x{d}, {d}(x{d})", .{ inst.rd, offset, inst.rs1 });
+                },
                 // lw
                 0b010 => {
                     const offset: i64 = @as(i12, @bitCast(inst.imm));
@@ -340,6 +564,21 @@ pub fn next(self: *Emulator) !bool {
             }
             self.pc += 4;
         },
+        .j_type => {
+            const inst: JType = @bitCast(instruction);
+            const imm: u12 = @truncate(instruction >> 20);
+            const offset = signExtend(u64, u12, imm);
+
+            if (enable_exceptions) {
+                if (offset & 0b011 != 0) {
+                    log.err("Instruction JAL can only jump to 4-byte aligned addresses", .{});
+                    return error.DecodeError;
+                }
+            }
+            self.registers[inst.rd] = self.pc + 4;
+            self.pc += offset;
+            self.logInst("jal x{d}, {d}", .{ inst.rd, offset });
+        },
         .jalr => {
             const inst: IType = @bitCast(instruction);
             std.debug.print("Inst is {}\n", .{inst});
@@ -359,12 +598,113 @@ pub fn next(self: *Emulator) !bool {
 
             log.debug("Program counter after jump is {d}", .{self.pc});
         },
+        .b_type => {
+            const inst: BType = @bitCast(instruction);
+            switch (inst.funct3) {
+                // beq
+                0b000 => {
+                    const offset: u12 = @as(u12, inst.offset0) | (@as(u12, inst.offset1) << 5);
+                    if (enable_exceptions) {
+                        if (offset & 0b011 != 0) {
+                            log.err("Instruction BEQ can only jump to 4-byte aligned addresses", .{});
+                            return error.DecodeError;
+                        }
+                    }
+                    const should_branch = self.registers[inst.rs1] == self.registers[inst.rs2];
+                    const effective = signExtend(u64, u12, offset) * @intFromBool(should_branch) + 4 * @as(u64, @intFromBool(!should_branch));
+                    self.pc += effective;
+                    self.logInst("beq x{d}, x{d}, {d}", .{ inst.rs1, inst.rs2, offset });
+                },
+                // bne
+                0b001 => {
+                    const offset: u12 = @as(u12, inst.offset0) | (@as(u12, inst.offset1) << 5);
+                    if (enable_exceptions) {
+                        if (offset & 0b011 != 0) {
+                            log.err("Instruction BNE can only jump to 4-byte aligned addresses", .{});
+                            return error.DecodeError;
+                        }
+                    }
+                    const should_branch = self.registers[inst.rs1] != self.registers[inst.rs2];
+                    const effective = signExtend(u64, u12, offset) * @intFromBool(should_branch) + 4 * @as(u64, @intFromBool(!should_branch));
+                    self.pc += effective;
+                    self.logInst("bne x{d}, x{d}, {d}", .{ inst.rs1, inst.rs2, offset });
+                },
+                // blt
+                0b100 => {
+                    const offset: u12 = @as(u12, inst.offset0) | (@as(u12, inst.offset1) << 5);
+                    if (enable_exceptions) {
+                        if (offset & 0b011 != 0) {
+                            log.err("Instruction BLT can only jump to 4-byte aligned addresses", .{});
+                            return error.DecodeError;
+                        }
+                    }
+                    const rs1: i64 = @bitCast(self.registers[inst.rs1]);
+                    const rs2: i64 = @bitCast(self.registers[inst.rs2]);
+                    const should_branch = rs1 < rs2;
+                    const effective = signExtend(u64, u12, offset) * @intFromBool(should_branch) + 4 * @as(u64, @intFromBool(!should_branch));
+                    self.pc += effective;
+                    self.logInst("blt x{d}, x{d}, {d}", .{ inst.rs1, inst.rs2, offset });
+                },
+                // bge
+                0b101 => {
+                    const offset: u12 = @as(u12, inst.offset0) | (@as(u12, inst.offset1) << 5);
+                    if (enable_exceptions) {
+                        if (offset & 0b011 != 0) {
+                            log.err("Instruction BGE can only jump to 4-byte aligned addresses", .{});
+                            return error.DecodeError;
+                        }
+                    }
+                    const rs1: i64 = @bitCast(self.registers[inst.rs1]);
+                    const rs2: i64 = @bitCast(self.registers[inst.rs2]);
+                    const should_branch = rs1 >= rs2;
+                    const effective = signExtend(u64, u12, offset) * @intFromBool(should_branch) + 4 * @as(u64, @intFromBool(!should_branch));
+                    self.pc += effective;
+                    self.logInst("bge x{d}, x{d}, {d}", .{ inst.rs1, inst.rs2, offset });
+                },
+                // bltu
+                0b110 => {
+                    const offset: u12 = @as(u12, inst.offset0) | (@as(u12, inst.offset1) << 5);
+                    if (enable_exceptions) {
+                        if (offset & 0b011 != 0) {
+                            log.err("Instruction BLT can only jump to 4-byte aligned addresses", .{});
+                            return error.DecodeError;
+                        }
+                    }
+                    const rs1 = self.registers[inst.rs1];
+                    const rs2 = self.registers[inst.rs2];
+                    const should_branch = rs1 < rs2;
+                    const effective = signExtend(u64, u12, offset) * @intFromBool(should_branch) + 4 * @as(u64, @intFromBool(!should_branch));
+                    self.pc += effective;
+                    self.logInst("bltu x{d}, x{d}, {d}", .{ inst.rs1, inst.rs2, offset });
+                },
+                // bgeu
+                0b111 => {
+                    const offset: u12 = @as(u12, inst.offset0) | (@as(u12, inst.offset1) << 5);
+                    if (enable_exceptions) {
+                        if (offset & 0b011 != 0) {
+                            log.err("Instruction BGE can only jump to 4-byte aligned addresses", .{});
+                            return error.DecodeError;
+                        }
+                    }
+                    const rs1 = self.registers[inst.rs1];
+                    const rs2 = self.registers[inst.rs2];
+                    const should_branch = rs1 >= rs2;
+                    const effective = signExtend(u64, u12, offset) * @intFromBool(should_branch) + 4 * @as(u64, @intFromBool(!should_branch));
+                    self.pc += effective;
+                    self.logInst("bgeu x{d}, x{d}, {d}", .{ inst.rs1, inst.rs2, offset });
+                },
+                else => std.debug.panic("unknown funct3", .{}),
+            }
+        },
         .sys_type => {
             const is_break = instruction >> 20 != 0;
             if (!is_break) {
                 self.logInst("ecall", .{});
                 if (self.registers[17] == 93) {
-                    log.info("Program returned with exit code: {d}\n", .{self.registers[10]});
+                    log.info("Program returned with exit code: {d} ({d})\n", .{
+                        self.registers[10],
+                        @as(i64, @bitCast(self.registers[10])),
+                    });
                     return true;
                 } else {
                     std.debug.panic("Unknown syscall", .{});
@@ -384,7 +724,7 @@ pub fn next(self: *Emulator) !bool {
         .auipc => {
             log.warn("auipc instruction untested, double check that it is correct if you see this!", .{});
             const inst: UType = @bitCast(instruction);
-            const imm: i32 = signExtend(i32, u20, inst.imm << 12);
+            const imm: u32 = signExtend(u32, u20, inst.imm << 12);
             self.pc += imm << 12;
             self.registers[inst.rd] = self.pc;
             self.logInst("auipc x{d}, {d}", .{ inst.rd, @as(i32, @bitCast(imm)) });

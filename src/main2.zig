@@ -93,7 +93,7 @@ pub fn main() !void {
         c.nk_glfw3_new_frame();
         c.glfwPollEvents();
 
-        if (c.nk_begin(ctx, "Controls", c.nk_rect(600, 600, 100, 100), c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE |
+        if (c.nk_begin(ctx, "Controls", c.nk_rect(25, @floatFromInt(height - 125), 120, 100), c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE |
             c.NK_WINDOW_MINIMIZABLE | c.NK_WINDOW_TITLE) == c.nk_true)
         {
             c.nk_layout_row_static(ctx, 30, 80, 1);
@@ -106,9 +106,13 @@ pub fn main() !void {
         }
         c.nk_end(ctx);
 
-        if (c.nk_begin(ctx, "Instructions", c.nk_rect(@floatFromInt(width - 200 - 50), 50, 200, 400), c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE |
-            c.NK_WINDOW_MINIMIZABLE | c.NK_WINDOW_TITLE) == c.nk_true)
-        {
+        if (c.nk_begin(
+            ctx,
+            "Instructions",
+            c.nk_rect(@floatFromInt(width - 200 - 25), 25, 200, @floatFromInt(height - 50)),
+            c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE |
+                c.NK_WINDOW_MINIMIZABLE | c.NK_WINDOW_TITLE,
+        ) == c.nk_true) {
             c.nk_layout_row_dynamic(ctx, 15, 1);
             for (emu.verbose_inst.items) |str| {
                 c.nk_text(ctx, str, @intCast(str.len), c.NK_TEXT_LEFT);
@@ -116,7 +120,7 @@ pub fn main() !void {
         }
         c.nk_end(ctx);
 
-        if (c.nk_begin(ctx, "Registers", c.nk_rect(50, 50, 600, 650), c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE |
+        if (c.nk_begin(ctx, "Registers", c.nk_rect(25, 25, 600, 650), c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE |
             c.NK_WINDOW_MINIMIZABLE | c.NK_WINDOW_TITLE) == c.nk_true)
         {
             const S = struct {
@@ -158,7 +162,7 @@ pub fn main() !void {
         }
         c.nk_end(ctx);
 
-        if (c.nk_begin(ctx, "Memory", c.nk_rect(50, 50, 600, 650), c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE |
+        if (c.nk_begin(ctx, "Memory", c.nk_rect(650, 25, 600, 650), c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE |
             c.NK_WINDOW_MINIMIZABLE | c.NK_WINDOW_TITLE) == c.nk_true)
         {
             const S = struct {
