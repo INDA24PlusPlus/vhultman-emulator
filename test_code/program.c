@@ -1,18 +1,4 @@
-#include <stdint.h>
-
-uint64_t fib(uint64_t n);
-
 int _start() {
-	uint64_t a = 7;
-	uint64_t b = fib(a);
-	return b;
+	const char* hello = "Hello";
+	return hello[0];
 }
-
-uint64_t fib(uint64_t n) {
-	if (n <= 1) {
-		return n;
-	}
-
-	return fib(n - 1) + fib(n - 2);
-}
-

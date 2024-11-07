@@ -92,7 +92,6 @@ pub fn main() !void {
     while (c.glfwWindowShouldClose(window) != c.GLFW_TRUE) {
         c.nk_glfw3_new_frame();
         c.glfwPollEvents();
-        _ = try emu.next();
 
         if (c.nk_begin(ctx, "Controls", c.nk_rect(25, @floatFromInt(height - 125), 120, 100), c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE |
             c.NK_WINDOW_MINIMIZABLE | c.NK_WINDOW_TITLE) == c.nk_true)
@@ -107,19 +106,21 @@ pub fn main() !void {
         }
         c.nk_end(ctx);
 
-        if (c.nk_begin(
-            ctx,
-            "Instructions",
-            c.nk_rect(@floatFromInt(width - 200 - 25), 25, 200, @floatFromInt(height - 50)),
-            c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE |
-                c.NK_WINDOW_MINIMIZABLE | c.NK_WINDOW_TITLE,
-        ) == c.nk_true) {
-            c.nk_layout_row_dynamic(ctx, 15, 1);
-            for (emu.verbose_inst.items) |str| {
-                c.nk_text(ctx, str, @intCast(str.len), c.NK_TEXT_LEFT);
+        if (@import("config").enable_verbose_instructions) {
+            if (c.nk_begin(
+                ctx,
+                "Instructions",
+                c.nk_rect(@floatFromInt(width - 200 - 25), 25, 200, @floatFromInt(height - 50)),
+                c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE |
+                    c.NK_WINDOW_MINIMIZABLE | c.NK_WINDOW_TITLE,
+            ) == c.nk_true) {
+                c.nk_layout_row_dynamic(ctx, 15, 1);
+                for (emu.verbose_inst.items) |str| {
+                    c.nk_text(ctx, str, @intCast(str.len), c.NK_TEXT_LEFT);
+                }
             }
+            c.nk_end(ctx);
         }
-        c.nk_end(ctx);
 
         if (c.nk_begin(ctx, "Registers", c.nk_rect(25, 25, 600, 650), c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE |
             c.NK_WINDOW_MINIMIZABLE | c.NK_WINDOW_TITLE) == c.nk_true)

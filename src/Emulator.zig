@@ -4,8 +4,8 @@ const Emulator = @This();
 
 const log = std.log.scoped(.emu);
 
-const enable_exceptions = true;
-const enable_verbose_instructions = true;
+const enable_exceptions = @import("config").enable_exceptions;
+const enable_verbose_instructions = @import("config").enable_verbose_instructions;
 
 // 2 MB
 const stack_size = 2 * (1 << 20) + 16;
@@ -82,9 +82,10 @@ code: []u8,
 gpa: Allocator,
 
 pub fn init(gpa: Allocator, code: []u8) !Emulator {
-    const stack = try gpa.alignedAlloc(u8, 128, stack_size);
+    const stack = try gpa.alignedAlloc(u8, 128, stack_size + code.len);
     var registers = [_]u64{0} ** 32;
-    registers[2] = stack.len - 16;
+    registers[2] = stack_size - 16;
+    @memcpy(stack[0..code.len], code);
 
     var new_code = try gpa.alloc(u8, code.len + 2 * 4);
     // addi a7, x0, 93
@@ -99,7 +100,7 @@ pub fn init(gpa: Allocator, code: []u8) !Emulator {
         .registers = registers,
         .pc = 4 * 2,
         .code = new_code,
-        .verbose_inst = std.ArrayListUnmanaged([:0]const u8){},
+        .verbose_inst = if (enable_verbose_instructions) std.ArrayListUnmanaged([:0]const u8){} else {},
     };
 }
 
@@ -117,7 +118,7 @@ pub fn deinit(self: *Emulator) void {
 pub fn next(self: *Emulator) !bool {
     self.registers[0] = 0;
     const instruction = std.mem.readInt(u32, self.code[self.pc..][0..4], .little);
-    std.debug.print("Instruction is {b}\n", .{instruction});
+    log.debug("Instruction is {b}\n", .{instruction});
     const opcode: InstType = @enumFromInt(instruction & 0x7F);
 
     switch (opcode) {
@@ -190,7 +191,7 @@ pub fn next(self: *Emulator) !bool {
         },
         .s_type => {
             const inst: SType = @bitCast(instruction);
-            std.debug.print("Inst is {}\n", .{inst});
+            log.debug("Inst is {}\n", .{inst});
             switch (inst.funct3) {
                 // sb
                 0b000 => {
@@ -204,7 +205,6 @@ pub fn next(self: *Emulator) !bool {
                     ptr.* = @truncate(self.registers[inst.rs2]);
 
                     self.logInst("sb x{d}, {d}(x{d})", .{ inst.rs2, offset, inst.rs1 });
-                    log.debug("Wrote x{d} with value {d} to memory address 0x{x}", .{ inst.rs2, self.registers[inst.rs2], address });
                 },
                 // sh
                 0b001 => {
@@ -236,7 +236,6 @@ pub fn next(self: *Emulator) !bool {
                     ptr.* = @truncate(self.registers[inst.rs2]);
 
                     self.logInst("sw x{d}, {d}(x{d})", .{ inst.rs2, offset, inst.rs1 });
-                    log.debug("Wrote x{d} with value {d} to memory address 0x{x}", .{ inst.rs2, self.registers[inst.rs2], address });
                 },
                 // sd
                 0b011 => {
@@ -258,9 +257,6 @@ pub fn next(self: *Emulator) !bool {
                     const ptr: *u64 = @ptrCast(@alignCast(&self.program_memory[address]));
                     ptr.* = self.registers[inst.rs2];
                     self.logInst("sd x{d}, {d}(x{d})", .{ inst.rs2, offset, inst.rs1 });
-
-                    log.debug("Wrote x{d} with value {d} to memory address 0x{x}", .{ inst.rs2, self.registers[inst.rs2], address });
-                    log.debug("Offset is {d}", .{offset});
                 },
                 else => std.debug.panic("Invalid funct3: {d}\n", .{inst.funct3}),
             }
@@ -447,7 +443,7 @@ pub fn next(self: *Emulator) !bool {
         },
         .load => {
             const inst: IType = @bitCast(instruction);
-            std.debug.print("Inst is {}\n", .{inst});
+            log.debug("Inst is {}\n", .{inst});
             switch (inst.funct3) {
                 // lb
                 0b000 => {
@@ -516,8 +512,6 @@ pub fn next(self: *Emulator) !bool {
                     self.registers[inst.rd] = signExtend(u64, u32, ptr.*);
 
                     self.logInst("lw x{d}, {d}(x{d})", .{ inst.rd, offset, inst.rs1 });
-                    log.debug("Loaded value {d} from address 0x{x} to x{d}", .{ self.registers[inst.rd], address, inst.rd });
-                    log.debug("Offset is {d}", .{offset});
                 },
                 0b011 => {
                     const offset = signExtend(i64, u12, inst.imm);
@@ -534,9 +528,6 @@ pub fn next(self: *Emulator) !bool {
                     const ptr: *u64 = @ptrCast(@alignCast(&self.program_memory[address]));
                     self.registers[inst.rd] = ptr.*;
                     self.logInst("ld x{d}, {d}(x{d})", .{ inst.rd, offset, inst.rs1 });
-
-                    log.debug("Loaded value {d} from address 0x{x} to x{d}", .{ self.registers[inst.rd], address, inst.rd });
-                    log.debug("Offset is {d}", .{offset});
                 },
                 // lwu
                 0b110 => {
@@ -554,9 +545,6 @@ pub fn next(self: *Emulator) !bool {
                     const ptr: *u32 = @ptrCast(@alignCast(&self.program_memory[address]));
                     self.registers[inst.rd] = ptr.*;
                     self.logInst("lwu x{d}, {d}(x{d})", .{ inst.rd, offset, inst.rs1 });
-
-                    log.debug("Loaded value {d} from address 0x{x} to x{d}", .{ self.registers[inst.rd], address, inst.rd });
-                    log.debug("Offset is {d}", .{offset});
                 },
                 else => std.debug.panic("Invalid funct3: {d}\n", .{inst.funct3}),
             }
@@ -578,15 +566,11 @@ pub fn next(self: *Emulator) !bool {
             self.logInst("jal x{d}, {d}", .{ inst.rd, offset });
         },
         .jalr => {
-            log.debug("PC before jalr is {d}", .{self.pc});
             const inst: IType = @bitCast(instruction);
-            std.debug.print("Inst is {}\n", .{inst});
             const offset = signExtend(i64, u12, inst.imm);
             const base: i64 = @bitCast(self.registers[inst.rs1]);
             const address: u64 = @bitCast(base + offset);
-            log.debug("JALR wants to go to adress: {d}, offset is {d} and base is {d}", .{ address, offset, base });
             self.registers[inst.rd] = self.pc + 4;
-
             if (enable_exceptions) {
                 if (address & 0b011 != 0) {
                     log.err("Instruction JALR can only jump to 4-byte aligned addresses", .{});
@@ -595,8 +579,6 @@ pub fn next(self: *Emulator) !bool {
             }
             self.pc = address & ~@as(u64, 1);
             self.logInst("jalr x{d}, x{d}, {d}", .{ inst.rd, inst.rs1, offset });
-
-            log.debug("Program counter after jump is {d}", .{self.pc});
         },
         .b_type => {
             const inst: BType = @bitCast(instruction);
@@ -701,10 +683,11 @@ pub fn next(self: *Emulator) !bool {
             if (!is_break) {
                 self.logInst("ecall", .{});
                 if (self.registers[17] == 93) {
-                    log.info("Program returned with exit code: {d} ({d})\n", .{
+                    std.io.getStdOut().writer().print("Program returned with exit code: {d} ({d})\n", .{
                         self.registers[10],
                         @as(i64, @bitCast(self.registers[10])),
-                    });
+                    }) catch unreachable;
+
                     return true;
                 } else {
                     std.debug.panic("Unknown syscall", .{});
