@@ -12,7 +12,7 @@ const c = @cImport({
     @cDefine("NK_INCLUDE_DEFAULT_FONT", "");
     @cDefine("NK_INCLUDE_STANDARD_IO", "");
     @cInclude("nuklear.h");
-    @cInclude("nuklear_glfw_gl4.h");
+    @cInclude("nuklear_glfw_gl3.h");
 });
 
 const window_width = 1920;
@@ -29,6 +29,7 @@ pub fn main() !void {
 
     c.glfwWindowHint(c.GLFW_CONTEXT_VERSION_MAJOR, 4);
     c.glfwWindowHint(c.GLFW_CONTEXT_VERSION_MINOR, 5);
+    c.glfwWindowHint(c.GLFW_SCALE_TO_MONITOR, c.GLFW_TRUE);
     c.glfwWindowHint(c.GLFW_OPENGL_PROFILE, c.GLFW_OPENGL_CORE_PROFILE);
 
     if (@import("builtin").mode == .Debug) {
@@ -49,14 +50,15 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
+    var nk_glfw = std.mem.zeroes(c.nk_glfw);
     const max_vertex_buffer = 512 * 1024;
     const max_element_buffer = 128 * 1024;
-    const ctx = c.nk_glfw3_init(window, c.NK_GLFW3_INSTALL_CALLBACKS, max_vertex_buffer, max_element_buffer);
-    defer c.nk_glfw3_shutdown();
+    const ctx = c.nk_glfw3_init(&nk_glfw, window, c.NK_GLFW3_INSTALL_CALLBACKS);
+    defer c.nk_glfw3_shutdown(&nk_glfw);
     {
         var font: ?*c.nk_font_atlas = undefined;
-        c.nk_glfw3_font_stash_begin(&font);
-        defer c.nk_glfw3_font_stash_end();
+        c.nk_glfw3_font_stash_begin(&nk_glfw, &font);
+        defer c.nk_glfw3_font_stash_end(&nk_glfw);
     }
     var bg: c.nk_colorf = .{
         .r = 0.10,
@@ -78,7 +80,7 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
 
-    if (args.len != 2) {
+    if (args.len != 3) {
         std.process.fatal("Usage: ./rv64i_emu_gui <bin_file> <start of code (hex)>", .{});
     }
 
@@ -99,7 +101,7 @@ pub fn main() !void {
     var prev_register: [32]u64 = emu.registers;
 
     while (c.glfwWindowShouldClose(window) != c.GLFW_TRUE) {
-        c.nk_glfw3_new_frame();
+        c.nk_glfw3_new_frame(&nk_glfw);
         c.glfwPollEvents();
 
         if (c.nk_begin(ctx, "Controls", c.nk_rect(25, @floatFromInt(height - 125), 120, 100), c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE |
@@ -241,7 +243,7 @@ pub fn main() !void {
         c.glViewport(0, 0, width, height);
         c.glClear(c.GL_COLOR_BUFFER_BIT);
         c.glClearColor(bg.r, bg.g, bg.b, bg.a);
-        c.nk_glfw3_render(c.NK_ANTI_ALIASING_ON);
+        c.nk_glfw3_render(&nk_glfw, c.NK_ANTI_ALIASING_ON, max_vertex_buffer, max_element_buffer);
         c.glfwSwapBuffers(window);
     }
 }
