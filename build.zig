@@ -28,7 +28,7 @@ pub fn build(b: *std.Build) void {
     options.addOption(bool, "enable_verbose_instructions", use_log_instructions);
 
     const exe = b.addExecutable(.{
-        .name = "rv64_emu_gui",
+        .name = "rv64i_emu_gui",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
