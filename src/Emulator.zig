@@ -84,38 +84,48 @@ const JType = packed struct(u32) {
 
 verbose_inst: if (enable_verbose_instructions) std.ArrayListUnmanaged([:0]const u8) else void,
 
+// all memory that the emulated program can use.
 program_memory: []u8,
+
+// used for dynamic allocation.
+program_heap: []u8,
+stack_memory: []u8,
+
 registers: [32]u64,
 pc: u64,
 code: []u8,
 gpa: Allocator,
 
-pub fn init(gpa: Allocator, code: []u8) !Emulator {
-    const stack = try gpa.alignedAlloc(u8, 128, stack_size + code.len);
-    var registers = [_]u64{0} ** 32;
-    registers[2] = stack.len - 16;
-    @memcpy(stack[0..code.len], code);
+pub fn init(gpa: Allocator, binary: []u8, program_memory: []align(std.mem.page_size) u8) !Emulator {
+    if (program_memory.len < stack_size) {
+        return error.ProgramMemoryTooSmall;
+    }
 
-    var new_code = try gpa.alloc(u8, code.len + 2 * 4);
-    // addi a7, x0, 93
-    std.mem.writeInt(u32, new_code[0..4], 0b1011101_00000_000_10001_0010011, .little);
-    // ecall
-    std.mem.writeInt(u32, new_code[4..8], 0b1110011, .little);
-    @memcpy(new_code[4 * 2 ..], code);
+    const stack_end = program_memory.len - stack_size;
+    log.info("Stack ends at index {d}", .{stack_end});
+
+    const stack = program_memory[stack_end..];
+    const program_heap = program_memory[0..stack_end];
+
+    var registers = [_]u64{0} ** 32;
+    registers[2] = stack_end;
+
+    const code = program_memory[0..binary.len];
+    @memcpy(code[0..binary.len], binary);
 
     return .{
         .gpa = gpa,
-        .program_memory = stack,
+        .program_memory = program_memory,
+        .stack_memory = stack,
+        .program_heap = program_heap,
         .registers = registers,
-        .pc = 4 * 2,
-        .code = new_code,
+        .pc = 0,
+        .code = code,
         .verbose_inst = if (enable_verbose_instructions) std.ArrayListUnmanaged([:0]const u8){} else {},
     };
 }
 
 pub fn deinit(self: *Emulator) void {
-    self.gpa.free(self.program_memory);
-    self.gpa.free(self.code);
     if (enable_verbose_instructions) {
         for (self.verbose_inst.items) |str| {
             self.gpa.free(str);
@@ -722,6 +732,7 @@ pub fn next(self: *Emulator) !bool {
                         _ = try std.io.getStdOut().write(slice);
                     },
                     .alloc => {
+                        log.debug("allocated {d} bytes", .{self.registers[10]});
                         self.registers[10] = 10000;
                     },
                     .exit => {

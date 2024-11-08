@@ -1,6 +1,6 @@
 const std = @import("std");
 
-export fn _start() i32 {
+export fn _start() noreturn {
     const ptr = alloc(100)[0..100];
     for (ptr, 0..) |*b, i| {
         b.* = @intCast(i);
@@ -13,7 +13,16 @@ export fn _start() i32 {
     }
 
     write("Hello, World!\n");
-    return sum;
+    exit(0);
+}
+
+fn exit(code: u64) noreturn {
+    asm volatile ("ecall"
+        :
+        : [number] "{a7}" (93),
+          [return_code] "{a0}" (code),
+    );
+    unreachable;
 }
 
 fn alloc(number_of_bytes: u64) [*]u8 {
@@ -21,7 +30,6 @@ fn alloc(number_of_bytes: u64) [*]u8 {
         : [ret] "={a0}" (-> [*]u8),
         : [number] "{a7}" (2),
           [number_of_bytes] "{a0}" (number_of_bytes),
-        : "a1", "a7", "a0"
     );
 }
 

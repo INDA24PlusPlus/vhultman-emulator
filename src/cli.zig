@@ -8,7 +8,7 @@ pub fn main() !void {
     defer std.process.argsFree(gpa, args);
 
     if (args.len != 3) {
-        std.process.fatal("Usage: ./rv64i_emu_gui <bin_file> <start of code (hex)>", .{});
+        std.process.fatal("Usage: ./rv64i_emu_gui <bin_file> <emulator memory>", .{});
     }
 
     const file_name = args[1];
@@ -18,11 +18,14 @@ pub fn main() !void {
     };
     defer gpa.free(binary_file);
 
-    const code_start = std.fmt.parseUnsigned(u32, args[2], 16) catch |err| {
-        std.process.fatal("Failed to parse code start with error: {s}", .{@errorName(err)});
+    const memory_ammount = std.fmt.parseUnsigned(u32, args[2], 10) catch |err| {
+        std.process.fatal("Failed to parse memory ammount with error: {s}", .{@errorName(err)});
     };
 
-    var emu = try Emulator.init(gpa, binary_file[code_start..]);
+    const program_memory = try std.heap.page_allocator.alignedAlloc(u8, std.mem.page_size, memory_ammount);
+    defer std.heap.page_allocator.free(program_memory);
+
+    var emu = try Emulator.init(gpa, binary_file, program_memory);
     defer emu.deinit();
 
     while (!try emu.next()) {}
