@@ -38,7 +38,7 @@ pub fn main() !void {
         c.glfwWindowHint(c.GLFW_CONTEXT_NO_ERROR, c.GLFW_TRUE);
     }
 
-    const window = c.glfwCreateWindow(window_width, window_height, "Ray Tracer", null, null) orelse {
+    const window = c.glfwCreateWindow(window_width, window_height, "Emulator", null, null) orelse {
         std.log.err("Failed to create GLFW window", .{});
         std.process.exit(1);
     };
@@ -72,10 +72,10 @@ pub fn main() !void {
     c.glfwGetWindowSize(window, &width, &height);
     c.glViewport(0, 0, width, height);
 
-    if (@import("builtin").mode == .Debug) {
-        c.glDebugMessageCallback(glDebugCallback, null);
-        c.glEnable(c.GL_DEBUG_OUTPUT_SYNCHRONOUS);
-    }
+    //if (@import("builtin").mode == .Debug) {
+    //    c.glDebugMessageCallback(glDebugCallback, null);
+    //    c.glEnable(c.GL_DEBUG_OUTPUT_SYNCHRONOUS);
+    //}
 
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
@@ -107,13 +107,14 @@ pub fn main() !void {
         if (c.nk_begin(ctx, "Controls", c.nk_rect(25, @floatFromInt(height - 125), 120, 100), c.NK_WINDOW_BORDER | c.NK_WINDOW_MOVABLE | c.NK_WINDOW_SCALABLE |
             c.NK_WINDOW_MINIMIZABLE | c.NK_WINDOW_TITLE) == c.nk_true)
         {
-            c.nk_layout_row_static(ctx, 30, 80, 1);
+            c.nk_layout_row_dynamic(ctx, 30, 1);
             if (c.nk_button_label(ctx, "Next") == c.nk_true) {
                 prev_register = emu.registers;
                 if (try emu.next()) {
                     std.debug.print("Program finished\n", .{});
                 }
             }
+            emu.pc = @intCast(c.nk_propertyi(ctx, "PC:", 0, @intCast(emu.pc), 1000, 4, 1));
         }
         c.nk_end(ctx);
 

@@ -7,6 +7,13 @@ const log = std.log.scoped(.emu);
 const enable_exceptions = @import("config").enable_exceptions;
 const enable_verbose_instructions = @import("config").enable_verbose_instructions;
 
+const Syscall = enum(u64) {
+    write = 1,
+    alloc = 2,
+    exit = 93,
+    _,
+};
+
 // 2 MB
 const stack_size = 2 * (1 << 20) + 16;
 
@@ -54,11 +61,13 @@ const RType = packed struct(u32) {
 
 const BType = packed struct(u32) {
     opcode: u7,
-    offset0: u5,
+    offset0: u1,
+    offset1: u4,
     funct3: u3,
     rs1: u5,
     rs2: u5,
-    offset1: u7,
+    offset2: u6,
+    sign: u1,
 };
 
 const UType = packed struct(u32) {
@@ -118,7 +127,7 @@ pub fn deinit(self: *Emulator) void {
 pub fn next(self: *Emulator) !bool {
     self.registers[0] = 0;
     const instruction = std.mem.readInt(u32, self.code[self.pc..][0..4], .little);
-    log.debug("Instruction is {b}\n", .{instruction});
+    log.debug("Instruction is {b}", .{instruction});
     const opcode: InstType = @enumFromInt(instruction & 0x7F);
 
     switch (opcode) {
@@ -191,7 +200,7 @@ pub fn next(self: *Emulator) !bool {
         },
         .s_type => {
             const inst: SType = @bitCast(instruction);
-            log.debug("Inst is {}\n", .{inst});
+            log.debug("Inst is {}", .{inst});
             switch (inst.funct3) {
                 // sb
                 0b000 => {
@@ -443,7 +452,7 @@ pub fn next(self: *Emulator) !bool {
         },
         .load => {
             const inst: IType = @bitCast(instruction);
-            log.debug("Inst is {}\n", .{inst});
+            log.debug("Inst is {}", .{inst});
             switch (inst.funct3) {
                 // lb
                 0b000 => {
@@ -582,97 +591,103 @@ pub fn next(self: *Emulator) !bool {
         },
         .b_type => {
             const inst: BType = @bitCast(instruction);
+
+            const offset: i12 = @bitCast((@as(u12, inst.offset0) << 10) | (@as(u12, inst.offset1) << 1) | (@as(u12, inst.offset2) << 5) | (@as(u12, inst.sign) << 11));
+            log.debug("offset is {d}\n", .{offset});
             switch (inst.funct3) {
                 // beq
                 0b000 => {
-                    const offset: u12 = @as(u12, inst.offset0) | (@as(u12, inst.offset1) << 5);
+                    const should_branch = self.registers[inst.rs1] == self.registers[inst.rs2];
+                    var effective = signExtend(i64, i12, offset) * @intFromBool(should_branch) + 2 * @as(i64, @intFromBool(!should_branch));
+                    effective <<= 1;
+
                     if (enable_exceptions) {
-                        if (offset & 0b011 != 0) {
+                        if (effective & 0b011 != 0) {
                             log.err("Instruction BEQ can only jump to 4-byte aligned addresses", .{});
                             return error.DecodeError;
                         }
                     }
-                    const should_branch = self.registers[inst.rs1] == self.registers[inst.rs2];
-                    const effective = signExtend(u64, u12, offset) * @intFromBool(should_branch) + 4 * @as(u64, @intFromBool(!should_branch));
-                    self.pc += effective;
+                    // TODO: Overflo.. if this overflows we are fucked either way.
+                    self.pc = @bitCast(@as(i64, @bitCast(self.pc)) + effective);
                     self.logInst("beq x{d}, x{d}, {d}", .{ inst.rs1, inst.rs2, offset });
                 },
                 // bne
                 0b001 => {
-                    const offset: u12 = @as(u12, inst.offset0) | (@as(u12, inst.offset1) << 5);
+                    const should_branch = self.registers[inst.rs1] != self.registers[inst.rs2];
+                    var effective = signExtend(i64, i12, offset) * @intFromBool(should_branch) + 2 * @as(i64, @intFromBool(!should_branch));
+                    effective <<= 1;
+
                     if (enable_exceptions) {
-                        if (offset & 0b011 != 0) {
-                            log.err("Instruction BNE can only jump to 4-byte aligned addresses", .{});
+                        if (effective & 0b011 != 0) {
+                            log.err("Instruction BEQ can only jump to 4-byte aligned addresses", .{});
                             return error.DecodeError;
                         }
                     }
-                    const should_branch = self.registers[inst.rs1] != self.registers[inst.rs2];
-                    const effective = signExtend(u64, u12, offset) * @intFromBool(should_branch) + 4 * @as(u64, @intFromBool(!should_branch));
-                    self.pc += effective;
+                    // TODO: Overflo.. if this overflows we are fucked either way.
+                    self.pc = @bitCast(@as(i64, @bitCast(self.pc)) + effective);
                     self.logInst("bne x{d}, x{d}, {d}", .{ inst.rs1, inst.rs2, offset });
                 },
                 // blt
                 0b100 => {
-                    const offset: u12 = @as(u12, inst.offset0) | (@as(u12, inst.offset1) << 5);
+                    const rs1: i64 = @bitCast(self.registers[inst.rs1]);
+                    const rs2: i64 = @bitCast(self.registers[inst.rs2]);
+                    const should_branch = rs1 < rs2;
+                    const effective = signExtend(i64, i12, offset) * @intFromBool(should_branch) + 4 * @as(i64, @intFromBool(!should_branch));
                     if (enable_exceptions) {
-                        if (offset & 0b011 != 0) {
+                        if (effective & 0b011 != 0) {
                             log.err("Instruction BLT can only jump to 4-byte aligned addresses", .{});
                             return error.DecodeError;
                         }
                     }
-                    const rs1: i64 = @bitCast(self.registers[inst.rs1]);
-                    const rs2: i64 = @bitCast(self.registers[inst.rs2]);
-                    const should_branch = rs1 < rs2;
-                    const effective = signExtend(u64, u12, offset) * @intFromBool(should_branch) + 4 * @as(u64, @intFromBool(!should_branch));
-                    self.pc += effective;
+                    self.pc = @bitCast(@as(i64, @bitCast(self.pc)) + effective);
                     self.logInst("blt x{d}, x{d}, {d}", .{ inst.rs1, inst.rs2, offset });
                 },
                 // bge
                 0b101 => {
-                    const offset: u12 = @as(u12, inst.offset0) | (@as(u12, inst.offset1) << 5);
+                    const rs1: i64 = @bitCast(self.registers[inst.rs1]);
+                    const rs2: i64 = @bitCast(self.registers[inst.rs2]);
+                    const should_branch = rs1 >= rs2;
+                    const effective = signExtend(i64, i12, offset) * @intFromBool(should_branch) + 4 * @as(i64, @intFromBool(!should_branch));
+
                     if (enable_exceptions) {
-                        if (offset & 0b011 != 0) {
+                        if (effective & 0b011 != 0) {
                             log.err("Instruction BGE can only jump to 4-byte aligned addresses", .{});
                             return error.DecodeError;
                         }
                     }
-                    const rs1: i64 = @bitCast(self.registers[inst.rs1]);
-                    const rs2: i64 = @bitCast(self.registers[inst.rs2]);
-                    const should_branch = rs1 >= rs2;
-                    const effective = signExtend(u64, u12, offset) * @intFromBool(should_branch) + 4 * @as(u64, @intFromBool(!should_branch));
-                    self.pc += effective;
+                    self.pc = @bitCast(@as(i64, @bitCast(self.pc)) + effective);
                     self.logInst("bge x{d}, x{d}, {d}", .{ inst.rs1, inst.rs2, offset });
                 },
                 // bltu
                 0b110 => {
-                    const offset: u12 = @as(u12, inst.offset0) | (@as(u12, inst.offset1) << 5);
+                    const rs1 = self.registers[inst.rs1];
+                    const rs2 = self.registers[inst.rs2];
+                    const should_branch = rs1 < rs2;
+                    const effective = signExtend(i64, i12, offset) * @intFromBool(should_branch) + 4 * @as(i64, @intFromBool(!should_branch));
+
                     if (enable_exceptions) {
-                        if (offset & 0b011 != 0) {
+                        if (effective & 0b011 != 0) {
                             log.err("Instruction BLT can only jump to 4-byte aligned addresses", .{});
                             return error.DecodeError;
                         }
                     }
-                    const rs1 = self.registers[inst.rs1];
-                    const rs2 = self.registers[inst.rs2];
-                    const should_branch = rs1 < rs2;
-                    const effective = signExtend(u64, u12, offset) * @intFromBool(should_branch) + 4 * @as(u64, @intFromBool(!should_branch));
-                    self.pc += effective;
+                    self.pc = @bitCast(@as(i64, @bitCast(self.pc)) + effective);
                     self.logInst("bltu x{d}, x{d}, {d}", .{ inst.rs1, inst.rs2, offset });
                 },
                 // bgeu
                 0b111 => {
-                    const offset: u12 = @as(u12, inst.offset0) | (@as(u12, inst.offset1) << 5);
+                    const rs1 = self.registers[inst.rs1];
+                    const rs2 = self.registers[inst.rs2];
+                    const should_branch = rs1 >= rs2;
+                    const effective = signExtend(i64, i12, offset) * @intFromBool(should_branch) + 4 * @as(i64, @intFromBool(!should_branch));
+
                     if (enable_exceptions) {
-                        if (offset & 0b011 != 0) {
+                        if (effective & 0b011 != 0) {
                             log.err("Instruction BGE can only jump to 4-byte aligned addresses", .{});
                             return error.DecodeError;
                         }
                     }
-                    const rs1 = self.registers[inst.rs1];
-                    const rs2 = self.registers[inst.rs2];
-                    const should_branch = rs1 >= rs2;
-                    const effective = signExtend(u64, u12, offset) * @intFromBool(should_branch) + 4 * @as(u64, @intFromBool(!should_branch));
-                    self.pc += effective;
+                    self.pc = @bitCast(@as(i64, @bitCast(self.pc)) + effective);
                     self.logInst("bgeu x{d}, x{d}, {d}", .{ inst.rs1, inst.rs2, offset });
                 },
                 else => std.debug.panic("unknown funct3", .{}),
@@ -682,15 +697,26 @@ pub fn next(self: *Emulator) !bool {
             const is_break = instruction >> 20 != 0;
             if (!is_break) {
                 self.logInst("ecall", .{});
-                if (self.registers[17] == 93) {
-                    std.io.getStdOut().writer().print("Program returned with exit code: {d} ({d})\n", .{
-                        self.registers[10],
-                        @as(i64, @bitCast(self.registers[10])),
-                    }) catch unreachable;
+                const kind: Syscall = @enumFromInt(self.registers[17]);
+                switch (kind) {
+                    .write => {
+                        const ptr = self.registers[10];
+                        const len = self.registers[11];
+                        const slice = self.program_memory[ptr .. ptr + len];
+                        _ = try std.io.getStdOut().write(slice);
+                    },
+                    .alloc => {
+                        self.registers[10] = 600;
+                    },
+                    .exit => {
+                        std.io.getStdOut().writer().print("Program returned with exit code: {d} ({d})\n", .{
+                            self.registers[10],
+                            @as(i64, @bitCast(self.registers[10])),
+                        }) catch unreachable;
 
-                    return true;
-                } else {
-                    std.debug.panic("Unknown syscall", .{});
+                        return true;
+                    },
+                    _ => std.debug.panic("Unknown syscall", .{}),
                 }
             } else {
                 std.debug.panic("ebreak not implemented", .{});
