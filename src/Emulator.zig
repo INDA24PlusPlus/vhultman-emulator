@@ -593,7 +593,7 @@ pub fn next(self: *Emulator) !bool {
             const inst: BType = @bitCast(instruction);
 
             const offset: i12 = @bitCast((@as(u12, inst.offset0) << 10) | (@as(u12, inst.offset1) << 1) | (@as(u12, inst.offset2) << 5) | (@as(u12, inst.sign) << 11));
-            log.debug("offset is {d}\n", .{offset});
+            log.debug("offset is {d}", .{offset});
             switch (inst.funct3) {
                 // beq
                 0b000 => {
@@ -619,7 +619,7 @@ pub fn next(self: *Emulator) !bool {
 
                     if (enable_exceptions) {
                         if (effective & 0b011 != 0) {
-                            log.err("Instruction BEQ can only jump to 4-byte aligned addresses", .{});
+                            log.err("Instruction BNE can only jump to 4-byte aligned addresses", .{});
                             return error.DecodeError;
                         }
                     }
