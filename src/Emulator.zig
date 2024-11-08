@@ -93,7 +93,7 @@ gpa: Allocator,
 pub fn init(gpa: Allocator, code: []u8) !Emulator {
     const stack = try gpa.alignedAlloc(u8, 128, stack_size + code.len);
     var registers = [_]u64{0} ** 32;
-    registers[2] = stack_size - 16;
+    registers[2] = stack.len - 16;
     @memcpy(stack[0..code.len], code);
 
     var new_code = try gpa.alloc(u8, code.len + 2 * 4);
@@ -592,8 +592,21 @@ pub fn next(self: *Emulator) !bool {
         .b_type => {
             const inst: BType = @bitCast(instruction);
 
-            const offset: i12 = @bitCast((@as(u12, inst.offset0) << 10) | (@as(u12, inst.offset1) << 1) | (@as(u12, inst.offset2) << 5) | (@as(u12, inst.sign) << 11));
+            // zig fmt: off
+            const offset: i12 = 
+            @bitCast((@as(u12, inst.offset1))
+            | (@as(u12, inst.offset2) << 4)
+            | (@as(u12, inst.offset0) << 10)
+            | (@as(u12, inst.sign) << 11));
+
+            log.debug("Sign bit is {b}", .{inst.sign});
+            log.debug("bit 11 is {b}", .{inst.offset0});
+            log.debug("bits 10-5 is {b}", .{inst.offset2});
+            log.debug("bits 4-1 is {b}", .{inst.offset1});
+            log.debug("Combined is {b}", .{@as(u12, @bitCast(offset))});
             log.debug("offset is {d}", .{offset});
+
+            // zig fmt: on
             switch (inst.funct3) {
                 // beq
                 0b000 => {
@@ -703,10 +716,13 @@ pub fn next(self: *Emulator) !bool {
                         const ptr = self.registers[10];
                         const len = self.registers[11];
                         const slice = self.program_memory[ptr .. ptr + len];
+                        log.debug("ptr is {d}", .{ptr});
+                        log.debug("len is {d}", .{len});
+                        log.debug("memory is {d}", .{slice});
                         _ = try std.io.getStdOut().write(slice);
                     },
                     .alloc => {
-                        self.registers[10] = 600;
+                        self.registers[10] = 10000;
                     },
                     .exit => {
                         std.io.getStdOut().writer().print("Program returned with exit code: {d} ({d})\n", .{
