@@ -69,6 +69,12 @@ pub const OPCode = enum(u7) {
     l = 0b0000011,
     ri64 = 0b0011011,
     r64 = 0b0111011,
+
+    // instruction specific.
+    lui = 0b0110111,
+    auipc = 0b0010111,
+    jalr = 0b1100111,
+    jal = 0b1101111,
     ecall = 0b1110011,
 };
 
@@ -481,6 +487,46 @@ pub fn next(self: *Emulator) !bool {
                 else => std.debug.panic("Invalid funct3: {d}\n", .{inst.funct3}),
             }
             self.pc += 4;
+        },
+        .lui => {
+            const inst: UType = @bitCast(instruction);
+            const imm = signExtend(u32, u20, inst.imm);
+            self.registers[inst.rd] = imm << 12;
+            self.logInst("lui x{d}, {d}", .{ inst.rd, @as(i32, @bitCast(imm)) });
+            self.pc += 4;
+        },
+        .auipc => {
+            const inst: UType = @bitCast(instruction);
+            const imm: i32 = signExtend(i32, u20, inst.imm) << 12;
+            const if_zero = @as(u64, @intFromBool(imm == 0)) * 4;
+            self.pc = @bitCast(@as(i64, @bitCast(self.pc)) + imm);
+            self.registers[inst.rd] = self.pc;
+            self.pc += if_zero;
+            self.logInst("auipc x{d}, {d}", .{ inst.rd, @as(i32, @bitCast(imm)) });
+        },
+        .jal => {
+            const inst: JType = @bitCast(instruction);
+
+            // zig fmt: off
+            const offset: i20 = @bitCast(
+              (@as(u20, inst.imm20) << 19)
+            | (@as(u20, inst.imm19_12) << 11)
+            | (@as(u20, inst.imm11) << 10)
+            | (@as(u20, inst.imm10_1)));
+            // zig fmt: on
+            const effective: i64 = signExtend(i64, i20, offset) << 1;
+            self.logInst("jal x{d}, {d}", .{ inst.rd, effective });
+            //log.warn("offset is {d}: {b}", .{ effective, @as(u64, @bitCast(effective)) });
+            //log.warn("Full instruction is {b}", .{instruction});
+
+            if (config.alignment_errors) {
+                if (effective & 0b011 != 0) {
+                    log.err("Instruction JAL can only jump to 4-byte aligned addresses", .{});
+                    return error.DecodeError;
+                }
+            }
+            self.registers[inst.rd] = self.pc + 4;
+            self.pc = @bitCast(@as(i64, @bitCast(self.pc)) + effective);
         },
         .ecall => {
             self.logInst("ecall", .{});
@@ -1539,7 +1585,7 @@ test "sraiw" {
     try std.testing.expectEqual(0xffff_ffff, emu.registers[10] >> 32);
 }
 
-test "stores" {
+test "store" {
     const src =
         // sb
         \\ addi x10, x0, 10
@@ -1592,6 +1638,161 @@ test "stores" {
     try std.testing.expect(try emu.next());
     const actual_sd = std.mem.readInt(u64, emu.program_memory[emu.registers[2] - 8 ..][0..8], .little);
     try std.testing.expectEqual(1 << 63, actual_sd);
+}
+
+test "load" {
+    const src =
+        // lb
+        \\ addi x10, x0, -1
+        \\ sb x2, x10, -1
+        \\ lb x10, x2, -1
+        // lbu
+        \\ addi x10, x0, -1
+        \\ sb x2, x10, -1
+        \\ lbu x10, x2, -1
+        // lh
+        \\ addi x11, x0, 1
+        \\ slli x11, x11, 15
+        \\ sh x2, x11, -2
+        \\ lh x11, x2, -2
+        // lhu
+        \\ lhu x11, x2, -2
+        // lw
+        \\ addi x11, x0, 1
+        \\ slli x11, x11, 31
+        \\ sw x2, x11, -4
+        \\ lw x11, x2, -4
+        // lwu
+        \\ lwu x11, x2, -4
+        // ld
+        \\ addi x12, x0, 1
+        \\ slli x12, x12, 63
+        \\ sw x2, x12, -8
+        \\ ld x12, x2, -8
+    ;
+    var code = std.ArrayListAligned(u8, std.mem.page_size).init(std.testing.allocator);
+    defer code.deinit();
+
+    var assembler = Assembler.init(src);
+    try assembler.run(code.writer());
+    _ = try code.addManyAsSlice(1 << 20);
+
+    var emu = Emulator.init(std.testing.allocator, code.items, 0);
+    defer emu.deinit();
+
+    // lb
+    try std.testing.expect(try emu.next());
+    try std.testing.expect(try emu.next());
+    try std.testing.expect(try emu.next());
+    try std.testing.expectEqual(std.math.maxInt(u64), emu.registers[10]);
+
+    // lbu
+    try std.testing.expect(try emu.next());
+    try std.testing.expect(try emu.next());
+    try std.testing.expect(try emu.next());
+    try std.testing.expectEqual(0xFF, emu.registers[10]);
+
+    // lh
+    try std.testing.expect(try emu.next());
+    try std.testing.expect(try emu.next());
+    try std.testing.expect(try emu.next());
+    try std.testing.expect(try emu.next());
+    try std.testing.expectEqual(1 << 15 | std.math.maxInt(u48) << 16, emu.registers[11]);
+
+    // lhu
+    try std.testing.expect(try emu.next());
+    try std.testing.expectEqual(1 << 15, emu.registers[11]);
+
+    // lw
+    try std.testing.expect(try emu.next());
+    try std.testing.expect(try emu.next());
+    try std.testing.expect(try emu.next());
+    try std.testing.expect(try emu.next());
+    try std.testing.expectEqual(1 << 31 | std.math.maxInt(u32) << 32, emu.registers[11]);
+
+    // lwu
+    try std.testing.expect(try emu.next());
+    try std.testing.expectEqual(1 << 31, emu.registers[11]);
+
+    // ld
+    try std.testing.expect(try emu.next());
+    try std.testing.expect(try emu.next());
+    try std.testing.expect(try emu.next());
+    try std.testing.expect(try emu.next());
+    try std.testing.expectEqual(1 << 63, emu.registers[12]);
+}
+
+test "lui" {
+    const src =
+        \\ lui x10, 262144
+        \\ addi x10, x10, 1
+        \\ lui x11, 912080
+        \\ addi x11, x11, 175
+    ;
+    var code = std.ArrayListAligned(u8, std.mem.page_size).init(std.testing.allocator);
+    defer code.deinit();
+
+    var assembler = Assembler.init(src);
+    try assembler.run(code.writer());
+    _ = try code.addManyAsSlice(1 << 20);
+
+    var emu = Emulator.init(std.testing.allocator, code.items, 0);
+    defer emu.deinit();
+
+    try std.testing.expect(try emu.next());
+    try std.testing.expect(try emu.next());
+    try std.testing.expectEqual(1 << 30 | 1, emu.registers[10]);
+
+    try std.testing.expect(try emu.next());
+    try std.testing.expect(try emu.next());
+    try std.testing.expectEqual(0xdead00af, emu.registers[11]);
+}
+
+test "auipc" {
+    const src =
+        \\ auipc x10, 0
+        \\ auipc x11, 1
+    ;
+    var code = std.ArrayListAligned(u8, std.mem.page_size).init(std.testing.allocator);
+    defer code.deinit();
+
+    var assembler = Assembler.init(src);
+    try assembler.run(code.writer());
+    _ = try code.addManyAsSlice(1 << 20);
+
+    var emu = Emulator.init(std.testing.allocator, code.items, 0);
+    defer emu.deinit();
+
+    try std.testing.expect(try emu.next());
+    try std.testing.expectEqual(0, emu.registers[10]);
+    try std.testing.expectEqual(4, emu.pc);
+
+    try std.testing.expect(try emu.next());
+    try std.testing.expectEqual((1 << 12) + 4, emu.registers[11]);
+    try std.testing.expectEqual((1 << 12) + 4, emu.pc);
+}
+
+test "jal" {
+    const src =
+        \\ jal x10, 0
+    ;
+    var code = std.ArrayListAligned(u8, std.mem.page_size).init(std.testing.allocator);
+    defer code.deinit();
+
+    var assembler = Assembler.init(src);
+    try assembler.run(code.writer());
+    _ = try code.addManyAsSlice(1 << 20);
+
+    var emu = Emulator.init(std.testing.allocator, code.items, 0);
+    defer emu.deinit();
+
+    try std.testing.expect(try emu.next());
+    try std.testing.expectEqual(0, emu.registers[10]);
+    try std.testing.expectEqual(4, emu.pc);
+
+    try std.testing.expect(try emu.next());
+    try std.testing.expectEqual((1 << 12) + 4, emu.registers[11]);
+    try std.testing.expectEqual((1 << 12) + 4, emu.pc);
 }
 
 test "ecall exit" {

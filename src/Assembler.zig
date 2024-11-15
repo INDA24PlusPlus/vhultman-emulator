@@ -38,7 +38,7 @@ fn encodeInstruction(self: *Assembler, writer: anytype) !void {
             try self.expectNext(.@",");
             inst.rs1 = try self.expectRegister();
             try self.expectNext(.@",");
-            inst.imm = @bitCast(try self.expectImmediate(i12));
+            inst.imm = @bitCast(try self.expectImmediate(12));
             break :blk @bitCast(inst);
         },
         .srli, .srai, .slli => blk: {
@@ -52,7 +52,7 @@ fn encodeInstruction(self: *Assembler, writer: anytype) !void {
             try self.expectNext(.@",");
             inst.rs1 = try self.expectRegister();
             try self.expectNext(.@",");
-            inst.imm = try self.expectImmediate(u6);
+            inst.imm = try self.expectImmediate(6);
             inst.imm |= (1 << 10) * @as(u12, @intFromBool(is_arithmetic));
             break :blk @bitCast(inst);
         },
@@ -79,7 +79,7 @@ fn encodeInstruction(self: *Assembler, writer: anytype) !void {
             try self.expectNext(.@",");
             inst.rs1 = try self.expectRegister();
             try self.expectNext(.@",");
-            inst.imm = @bitCast(try self.expectImmediate(i12));
+            inst.imm = @bitCast(try self.expectImmediate(12));
             break :blk @bitCast(inst);
         },
         .slliw, .srliw, .sraiw => blk: {
@@ -93,7 +93,7 @@ fn encodeInstruction(self: *Assembler, writer: anytype) !void {
             try self.expectNext(.@",");
             inst.rs1 = try self.expectRegister();
             try self.expectNext(.@",");
-            inst.imm = try self.expectImmediate(u5);
+            inst.imm = try self.expectImmediate(5);
             inst.imm |= (1 << 10) * @as(u12, @intFromBool(is_arithmetic));
 
             break :blk @bitCast(inst);
@@ -121,9 +121,47 @@ fn encodeInstruction(self: *Assembler, writer: anytype) !void {
             try self.expectNext(.@",");
             inst.rs2 = try self.expectRegister();
             try self.expectNext(.@",");
-            const imm = try self.expectImmediate(i12);
-            inst.imm0 = @as(u5, @bitCast(@as(i5, @truncate(imm))));
-            inst.imm1 = @as(u7, @bitCast(@as(i7, @truncate(imm >> 5))));
+            const imm = try self.expectImmediate(12);
+            inst.imm0 = @truncate(imm);
+            inst.imm1 = @truncate(imm >> 5);
+            break :blk @bitCast(inst);
+        },
+        // l-type
+        .lb,
+        .lbu,
+        .lh,
+        .lhu,
+        .lw,
+        .lwu,
+        .ld,
+        => blk: {
+            self.advanceTokenStream();
+            var inst: Emulator.IType = undefined;
+            inst.funct3 = self.curr_token.kind.funct3().?;
+            inst.opcode = .l;
+            inst.rd = try self.expectRegister();
+            try self.expectNext(.@",");
+            inst.rs1 = try self.expectRegister();
+            try self.expectNext(.@",");
+            inst.imm = @bitCast(try self.expectImmediate(12));
+            break :blk @bitCast(inst);
+        },
+        .auipc => blk: {
+            self.advanceTokenStream();
+            var inst: Emulator.UType = undefined;
+            inst.opcode = .auipc;
+            inst.rd = try self.expectRegister();
+            try self.expectNext(.@",");
+            inst.imm = @bitCast(try self.expectImmediate(20));
+            break :blk @bitCast(inst);
+        },
+        .lui => blk: {
+            self.advanceTokenStream();
+            var inst: Emulator.UType = undefined;
+            inst.opcode = .lui;
+            inst.rd = try self.expectRegister();
+            try self.expectNext(.@",");
+            inst.imm = @bitCast(try self.expectImmediate(20));
             break :blk @bitCast(inst);
         },
         // s-type
@@ -146,15 +184,28 @@ fn encodeInstruction(self: *Assembler, writer: anytype) !void {
     try writer.writeInt(u32, instruction, .little);
 }
 
-fn expectImmediate(self: *Assembler, comptime T: type) !T {
+fn expectImmediate(self: *Assembler, comptime num_bits: comptime_int) !@Type(.{ .int = .{
+    .signedness = .unsigned,
+    .bits = num_bits,
+} }) {
     try self.expectNext(.immediate);
     const slice = self.src[self.curr_token.start..self.curr_token.end];
+    const ReturnType = @Type(.{ .int = .{
+        .signedness = .unsigned,
+        .bits = num_bits,
+    } });
 
-    return std.fmt.parseInt(T, slice, 10) catch {
-        const expected_size = @typeInfo(T).int.bits;
-        log.err("Exptected {d} bit immediate but found {s}", .{ expected_size, slice });
+    const imm: i32 = @bitCast(try std.fmt.parseInt(i32, slice, 10));
+    if (imm < -1 and @abs(imm) > std.math.maxInt(ReturnType) - 1 << num_bits) {
+        log.err("Exptected {d} bit immediate but found {s}", .{ num_bits, slice });
         return error.ImmediateTooLarge;
-    };
+    }
+    if (imm > std.math.maxInt(ReturnType)) {
+        log.err("Exptected {d} bit immediate but found {s}", .{ num_bits, slice });
+        return error.ImmediateTooLarge;
+    }
+
+    return @truncate(@as(u32, @bitCast(imm)));
 }
 
 fn expectRegister(self: *Assembler) !u5 {
@@ -237,7 +288,10 @@ pub const Tokenizer = struct {
             .{ "lwu", .lwu },
             .{ "ld", .ld },
 
+            .{ "lui", .lui },
+            .{ "auipc", .auipc },
             .{ "ecall", .ecall },
+
             .{ "x0", .register },
             .{ "x1", .register },
             .{ "x2", .register },
@@ -322,7 +376,10 @@ pub const Tokenizer = struct {
             lwu,
             ld,
 
+            lui,
+            auipc,
             ecall,
+
             label,
             register,
             invalid,
@@ -337,24 +394,43 @@ pub const Tokenizer = struct {
                     .sub,
                     .subw,
                     .sb,
+                    .lb,
                     => 0b000,
                     .slli,
                     .sll,
                     .slliw,
                     .sllw,
                     .sh,
+                    .lh,
                     => 0b001,
                     .slti,
                     .slt,
                     .sw,
+                    .lw,
                     => 0b010,
                     .sltiu,
                     .sltu,
                     .sd,
+                    .ld,
                     => 0b011,
-                    .xori, .xor => 0b100,
-                    .srli, .srliw, .srlw, .srl, .srai, .sra, .sraiw, .sraw => 0b101,
-                    .ori, .@"or" => 0b110,
+                    .xori,
+                    .xor,
+                    .lbu,
+                    => 0b100,
+                    .srli,
+                    .srliw,
+                    .srlw,
+                    .srl,
+                    .srai,
+                    .sra,
+                    .sraiw,
+                    .sraw,
+                    .lhu,
+                    => 0b101,
+                    .ori,
+                    .@"or",
+                    .lwu,
+                    => 0b110,
                     .andi => 0b111,
                     else => null,
                 };
